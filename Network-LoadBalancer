@@ -1,5 +1,4 @@
-//
-
+//A startup script to be used by every virtual machine instance to setup Nginx server upon startup
 cat << EOF > startup.sh
 #! /bin/bash
 apt-get update
@@ -8,6 +7,7 @@ service nginx start
 sed -i -- 's/nginx/Google Cloud Platform - '"\$HOSTNAME"'/' /var/www/html/index.nginx-debian.html
 EOF
 
+//Create an instance template, which uses the startup script:
 gcloud compute instance-templates create nginx-template \
          --metadata-from-file startup-script=startup.sh
 
@@ -33,3 +33,41 @@ gcloud compute forwarding-rules create nginx-lb \
          --region us-central1 \
          --ports=80 \
          --target-pool nginx-pool
+         
+//Create a health check
+gcloud compute http-health-checks create http-basic-check
+
+//Define an HTTP service and map a port name to the relevant port for the instance group.
+//Now the load balancing service can forward traffic to the named port:
+gcloud compute instance-groups managed \
+       set-named-ports nginx-group \
+       --named-ports http:80
+       
+//Create a backend service
+gcloud compute backend-services create nginx-backend \
+      --protocol HTTP --http-health-checks http-basic-check --global
+      
+//Add the instance group to the backend service
+gcloud compute backend-services add-backend nginx-backend \
+    --instance-group nginx-group \
+    --instance-group-zone us-central1-a \
+    --global
+
+//Create a default URL map that directs all incoming requests to all your instances
+gcloud compute url-maps create web-map \
+    --default-service nginx-backend
+    
+//Create a target HTTP proxy to route requests to your URL map
+gcloud compute target-http-proxies create http-lb-proxy \
+    --url-map web-map
+
+//Create a global forwarding rule to handle and route incoming requests. 
+//A forwarding rule sends traffic to a specific target HTTP or HTTPS proxy depending on the IP address, IP protocol, and port specified. 
+//The global forwarding rule does not support multiple ports.
+gcloud compute forwarding-rules create http-content-rule \
+        --global \
+        --target-http-proxy http-lb-proxy \
+        --ports 80
+
+//LIst forwarding rules
+gcloud compute forwarding-rules list
